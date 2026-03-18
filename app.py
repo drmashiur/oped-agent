@@ -19,6 +19,8 @@ SOURCES_FILE = "sources.txt"
 SEEN_FILE = "seen_urls.txt"
 DATA_DIR = "data"
 
+# Comment 
+
 
 def load_sources():
     p = Path(SOURCES_FILE)
