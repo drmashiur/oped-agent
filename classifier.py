@@ -29,7 +29,7 @@ def classify_article(title: str, url: str, text: str) -> dict:
     trimmed = text[:12000]
 
     response = client.responses.create(
-        model="gpt-5-mini",
+        model="gpt-5-nano",
         input=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {
