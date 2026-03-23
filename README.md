@@ -203,7 +203,6 @@ Add:
 ## 👨‍💻 Author
 
 **Dr. Mashiur Rahman**
-Editor, biggani.org
 
 ---
 
