@@ -66,6 +66,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
+
 ---
 
 ### 3. Install dependencies
@@ -95,13 +96,21 @@ python -m playwright install --with-deps
 Create a `.env` file:
 
 ```
-TELEGRAM_BOT_TOKEN=your_token_here
-TELEGRAM_CHAT_ID=your_chat_id
+# OpenAI API Key
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Telegram Bot Configuration
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 ```
+
+
+You can use the env.example for your use
+
 
 ---
 
-### 6. Add sources
+### 6. Add sources and output folder
 
 Edit `sources.txt` and add URLs:
 
@@ -110,13 +119,26 @@ https://example.com/rss
 https://another-source.com
 ```
 
+create a folder `data` that will store the output data. 
+
 ---
 
 ## ▶️ Run the Application
 
+For simple output in your pc, run this command. It will not notify to your channel
+
+```bash
+python app.py
+```
+
+
+To send notification to your Telegram channel run this:
+
 ```bash
 python app-telegram.py
 ```
+
+
 
 ---
 
@@ -131,7 +153,7 @@ crontab -e
 Add:
 
 ```cron
-0 7-22 * * * cd /home/labuser/projects/oped-agent && /home/labuser/projects/oped-agent/.venv/bin/python app-telegram.py >> /home/labuser/projects/oped-agent/app.log 2>&1
+0 7-22 * * * cd /home/user/oped-agent && /home/user/oped-agent/.venv/bin/python app-telegram.py >> /home/user/app.log 2>&1
 ```
 
 ---
