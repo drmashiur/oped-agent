@@ -91,7 +91,26 @@ python -m playwright install --with-deps
 
 ---
 
-### 5. Setup environment variables
+### 5. Create a Telegram Bot
+
+You need a Telegram bot token and a chat ID to receive notifications.
+
+**Step 1 — Create a bot and get the token:**
+1. Open Telegram and search for **@BotFather**
+2. Send `/newbot` and follow the prompts (choose a name and username)
+3. BotFather will give you a token like: `123456789:AAFxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+4. Copy that token — it is your `TELEGRAM_BOT_TOKEN`
+
+**Step 2 — Get your Chat ID:**
+1. Search for **@userinfobot** on Telegram
+2. Send `/start` — it will reply with your Chat ID (a number like `7290619883`)
+3. That number is your `TELEGRAM_CHAT_ID`
+
+> If you want to send to a **channel**, add the bot as an admin to your channel, then use the channel's chat ID (e.g., `@yourchannel` or a negative number like `-1001234567890`).
+
+---
+
+### 6. Setup environment variables
 
 Create a `.env` file:
 
@@ -104,8 +123,7 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 ```
 
-
-You can use the env.example for your use
+You can use the `env.example` file as a template.
 
 
 ---
