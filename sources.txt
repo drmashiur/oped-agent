@@ -1,2 +1,19 @@
-https://www.ajkerpatrika.com/op-ed/column
-https://www.prothomalo.com/opinion
+# --- GLOBAL TECH, SCIENCE & INNOVATION EDITORIALS ---
+
+# MIT Technology Review - Top-tier tech op-eds and future-looking innovation trends
+https://www.technologyreview.com/feed/
+
+# Wired (Ideas Section) - Thought-provoking essays on how tech and science shape the world
+https://www.wired.com/feed/category/ideas/latest/rss
+
+# Project Syndicate (Technology & Internet) - The world's largest op-ed syndicate featuring global tech leaders
+https://www.project-syndicate.org/rss/topics/technology-and-the-internet
+
+# Scientific American (Global Feed) - Highly accessible science, R&D, and tech editorials
+https://rss.sciam.com/ScientificAmerican-Global
+
+# Ars Technica - Deep dives and editorial perspectives on IT, science, and tech policy
+http://feeds.arstechnica.com/arstechnica/index
+
+# New Scientist - Global science breakthroughs and expert opinion pieces
+https://www.newscientist.com/feed/home/

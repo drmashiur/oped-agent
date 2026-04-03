@@ -4,12 +4,11 @@ import os
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
 
+import feedparser
 import requests
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
 
 from classifier import classify_article
 
@@ -24,16 +23,18 @@ SOURCES_FILE = BASE_DIR / "sources.txt"
 SEEN_FILE = BASE_DIR / "seen_urls.txt"
 DATA_DIR = BASE_DIR / "data"
 
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+
+# Load the threshold from .env, defaulting to 50 if it's missing
+MIN_SCORE_THRESHOLD = int(os.getenv("MIN_SCORE_THRESHOLD", 50))
 
 
 def load_sources():
     p = Path(SOURCES_FILE)
     if not p.exists():
         return []
-    return [line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
 
 
 def load_seen():
@@ -47,57 +48,17 @@ def save_seen(seen_urls):
     Path(SEEN_FILE).write_text("\n".join(sorted(seen_urls)) + "\n", encoding="utf-8")
 
 
-def same_domain(base_url, candidate_url):
-    return urlparse(base_url).netloc == urlparse(candidate_url).netloc
-
-
-def extract_links_from_section(page_url):
-    links = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(ignore_https_errors=True)
-        page = context.new_page()
-        page.goto(page_url, wait_until="networkidle", timeout=60000)
-        html = page.content()
-        browser.close()
-
-    soup = BeautifulSoup(html, "lxml")
-
-    for a in soup.find_all("a", href=True):
-        href = urljoin(page_url, a["href"])
-        text = a.get_text(" ", strip=True)
-
-        if not same_domain(page_url, href):
-            continue
-        if len(text) < 20:
-            continue
-        if href.count("/") < 3:
-            continue
-
-        links.append((text, href))
-
-    unique = []
-    seen = set()
-    for title, url in links:
-        if url not in seen:
-            unique.append((title, url))
-            seen.add(url)
-
-    return unique[:30]
-
-
 def fetch_article_text(url):
     try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
+        r = requests.get(url, headers=HEADERS, timeout=15)
         r.raise_for_status()
     except Exception as e:
-        print(f"    Failed to fetch article text: {e}")
+        print(f"    Failed to fetch full article text: {e}")
         return ""
 
     soup = BeautifulSoup(r.text, "lxml")
 
-    for tag in soup(["script", "style", "noscript"]):
+    for tag in soup(["script", "style", "noscript", "nav", "footer", "header"]):
         tag.decompose()
 
     paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
@@ -113,7 +74,6 @@ def save_results_to_json(matched, timestamp):
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(matched, f, ensure_ascii=False, indent=2)
 
-    print(f"\nSaved JSON results to: {filename}")
     return str(filename)
 
 
@@ -129,17 +89,7 @@ def save_results_to_csv(matched, timestamp):
         writer.writeheader()
         writer.writerows(matched)
 
-    print(f"Saved CSV results to: {filename}")
     return str(filename)
-
-
-def escape_markdown_v2(text):
-    if text is None:
-        return ""
-    escape_chars = r"_*[]()~`>#+-=|{}.!"
-    for ch in escape_chars:
-        text = text.replace(ch, f"\\{ch}")
-    return text
 
 
 def send_telegram_message(message):
@@ -156,92 +106,46 @@ def send_telegram_message(message):
     }
 
     try:
-        response = requests.post(url, data=payload, timeout=30)
-        response.raise_for_status()
-        print("Telegram notification sent successfully.")
+        requests.post(url, data=payload, timeout=30).raise_for_status()
         return True
     except Exception as e:
         print(f"Failed to send Telegram notification: {e}")
         return False
 
 
-def send_telegram_message_markdown(message):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram settings are missing in .env")
-        return False
-
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": message,
-        "parse_mode": "MarkdownV2",
-        "disable_web_page_preview": False
-    }
-
-    try:
-        response = requests.post(url, data=payload, timeout=30)
-        response.raise_for_status()
-        print("Telegram markdown notification sent successfully.")
-        return True
-    except Exception as e:
-        print(f"Failed to send Telegram markdown notification: {e}")
-        return False
-
-
 def split_message(text, max_length=3500):
     parts = []
     current = ""
-
     for line in text.splitlines(True):
         if len(current) + len(line) > max_length:
             parts.append(current)
             current = line
         else:
             current += line
-
     if current:
         parts.append(current)
-
     return parts
 
 
 def build_telegram_messages(matched, json_path, csv_path):
-    messages = []
-
     if not matched:
-        msg = (
-            "Op-Ed Agent Update\n\n"
-            "আজ কোনো relevant op-ed article পাওয়া যায়নি।\n\n"
-            f"JSON: {json_path}\n"
-            f"CSV: {csv_path}"
-        )
-        messages.append(msg)
-        return messages
+        return []
 
-    header = (
-        f"Op-Ed Agent Update\n"
-        f"Matched articles found: {len(matched)}\n\n"
-    )
-
+    header = f"Op-Ed Agent Update\nArticles above threshold ({MIN_SCORE_THRESHOLD}): {len(matched)}\n\n"
     body_lines = []
+    
     for idx, item in enumerate(matched, start=1):
         body_lines.append(f"{idx}. {item['title']}")
         body_lines.append(f"Category: {item['category']}")
-        body_lines.append(f"Score: {item['score']}")
+        body_lines.append(f"Score: {item['score']}/100")
         body_lines.append(f"Summary: {item['summary']}")
         body_lines.append(f"URL: {item['url']}")
         body_lines.append("")
 
-    footer = (
-        f"Saved JSON: {json_path}\n"
-        f"Saved CSV: {csv_path}"
-    )
-
+    footer = f"Saved to JSON & CSV locally."
+    
     full_text = header + "\n".join(body_lines) + "\n" + footer
-    messages = split_message(full_text)
-
-    return messages
+    return split_message(full_text)
 
 
 def main():
@@ -255,68 +159,83 @@ def main():
     matched = []
 
     for source in sources:
-        print(f"\nChecking source: {source}")
+        print(f"\nChecking RSS feed: {source}")
         try:
-            links = extract_links_from_section(source)
+            feed = feedparser.parse(source)
         except Exception as e:
-            print(f"  Failed to extract links: {e}")
+            print(f"  Failed to parse feed: {e}")
             continue
+            
+        for entry in feed.entries[:15]:
+            title = entry.get('title', 'Unknown Title')
+            url = entry.get('link', '')
 
-        for title, url in links:
-            if url in seen_urls:
+            if not url or url in seen_urls:
                 continue
 
-            print(f"  Reading: {title[:80]}")
-            text = fetch_article_text(url)
-            seen_urls.add(url)
+            print(f"  Evaluating: {title[:80]}")
+            
+            summary_html = entry.get('summary', '') or entry.get('description', '')
+            text_content = BeautifulSoup(summary_html, "lxml").get_text(" ", strip=True)
+            
+            if len(text_content) < 500:
+                full_page_text = fetch_article_text(url)
+                if full_page_text:
+                    text_content = full_page_text
 
-            if len(text) < 500:
+            if len(text_content) < 300:
                 print("    Skipping: article text too short")
+                seen_urls.add(url)
+                save_seen(seen_urls)
                 continue
 
             try:
-                result = classify_article(title, url, text)
+                result = classify_article(title, url, text_content)
             except Exception as e:
                 print(f"    Classification failed: {e}")
                 continue
 
-            if result.get("relevant"):
-                matched_item = {
-                    "title": title,
-                    "url": url,
-                    "category": result.get("primary_category"),
-                    "score": result.get("score"),
-                    "summary": result.get("bangla_summary"),
-                }
-                matched.append(matched_item)
-                print(f"    MATCH [{result.get('score')}]: {url}")
+            seen_urls.add(url)
+            save_seen(seen_urls)
+
+            is_relevant = result.get("relevant", False)
+            score = result.get("score", 0)
+
+            if is_relevant:
+                if score >= MIN_SCORE_THRESHOLD:
+                    matched_item = {
+                        "title": title,
+                        "url": url,
+                        "category": result.get("primary_category"),
+                        "score": score,
+                        "summary": result.get("bangla_summary"),
+                    }
+                    matched.append(matched_item)
+                    print(f"    MATCH [Score: {score}]: Passed threshold!")
+                else:
+                    print(f"    REJECTED [Score: {score}]: Relevant, but below {MIN_SCORE_THRESHOLD} threshold.")
             else:
                 print("    Not relevant")
 
             time.sleep(1)
 
-    save_seen(seen_urls)
-
-    print("\n=== MATCHED ARTICLES ===")
+    print(f"\n=== MATCHED ARTICLES (>={MIN_SCORE_THRESHOLD}) ===")
     for item in matched:
-        print(f"\nTitle: {item['title']}")
-        print(f"URL: {item['url']}")
-        print(f"Category: {item['category']}")
-        print(f"Score: {item['score']}")
-        print(f"Summary: {item['summary']}")
+        print(f"\nTitle: {item['title']} (Score: {item['score']})")
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    json_path = save_results_to_json(matched, timestamp)
-    csv_path = save_results_to_csv(matched, timestamp)
-
-    telegram_messages = build_telegram_messages(matched, json_path, csv_path)
-
-    for msg in telegram_messages:
-        send_telegram_message(msg)
-        time.sleep(1)
-
-    if not matched:
-        print("\nNo matched articles found. Empty result files were still saved.")
+    
+    # We only save files and send Telegram messages if we actually matched something above the threshold
+    if matched:
+        json_path = save_results_to_json(matched, timestamp)
+        csv_path = save_results_to_csv(matched, timestamp)
+        
+        telegram_messages = build_telegram_messages(matched, json_path, csv_path)
+        for msg in telegram_messages:
+            send_telegram_message(msg)
+            time.sleep(1)
+    else:
+        print(f"\nNo articles met the minimum score threshold of {MIN_SCORE_THRESHOLD}.")
 
 
 if __name__ == "__main__":

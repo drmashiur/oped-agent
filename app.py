@@ -3,232 +3,94 @@ import json
 import time
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
-
+import feedparser
 import requests
 from bs4 import BeautifulSoup
-from playwright.sync_api import sync_playwright
-
 from classifier import classify_article
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36"
-}
-
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 SOURCES_FILE = "sources.txt"
 SEEN_FILE = "seen_urls.txt"
 DATA_DIR = "data"
 
-# Comment 
-
-
 def load_sources():
     p = Path(SOURCES_FILE)
-    if not p.exists():
-        return []
-    return [line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
-
+    if not p.exists(): return []
+    return [line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
 
 def load_seen():
     p = Path(SEEN_FILE)
-    if not p.exists():
-        return set()
+    if not p.exists(): return set()
     return set(line.strip() for line in p.read_text(encoding="utf-8").splitlines() if line.strip())
-
 
 def save_seen(seen_urls):
     Path(SEEN_FILE).write_text("\n".join(sorted(seen_urls)) + "\n", encoding="utf-8")
 
-
-def same_domain(base_url, candidate_url):
-    return urlparse(base_url).netloc == urlparse(candidate_url).netloc
-
-
-# def extract_links_from_section(page_url):
-#     links = []
-
-#     with sync_playwright() as p:
-#         browser = p.chromium.launch(headless=True)
-#         # page = browser.new_page()
-#         page = browser.new_page(ignore_https_errors=True)
-#         page.goto(page_url, wait_until="networkidle", timeout=60000)
-#         html = page.content()
-#         browser.close()
-
-#     soup = BeautifulSoup(html, "lxml")
-
-#     for a in soup.find_all("a", href=True):
-#         href = urljoin(page_url, a["href"])
-#         text = a.get_text(" ", strip=True)
-
-#         if not same_domain(page_url, href):
-#             continue
-#         if len(text) < 20:
-#             continue
-#         if href.count("/") < 3:
-#             continue
-
-#         links.append((text, href))
-
-#     unique = []
-#     seen = set()
-#     for title, url in links:
-#         if url not in seen:
-#             unique.append((title, url))
-#             seen.add(url)
-
-#     return unique[:30]
-
-def extract_links_from_section(page_url):
-    links = []
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(ignore_https_errors=True)
-        page = context.new_page()
-        page.goto(page_url, wait_until="networkidle", timeout=60000)
-        html = page.content()
-        browser.close()
-
-    soup = BeautifulSoup(html, "lxml")
-
-    for a in soup.find_all("a", href=True):
-        href = urljoin(page_url, a["href"])
-        text = a.get_text(" ", strip=True)
-
-        if not same_domain(page_url, href):
-            continue
-        if len(text) < 20:
-            continue
-        if href.count("/") < 3:
-            continue
-
-        links.append((text, href))
-
-    unique = []
-    seen = set()
-    for title, url in links:
-        if url not in seen:
-            unique.append((title, url))
-            seen.add(url)
-
-    return unique[:30]
-    
-def fetch_article_text(url):
+def fetch_full_text(url):
+    """Fallback to fetch full text if RSS description is too short."""
     try:
-        r = requests.get(url, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-    except Exception as e:
-        print(f"    Failed to fetch article text: {e}")
+        r = requests.get(url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, "lxml")
+        for tag in soup(["script", "style", "noscript", "nav", "footer"]):
+            tag.decompose()
+        paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
+        return "\n".join(p for p in paragraphs if len(p) > 40)[:20000]
+    except Exception:
         return ""
-
-    soup = BeautifulSoup(r.text, "lxml")
-
-    for tag in soup(["script", "style", "noscript"]):
-        tag.decompose()
-
-    paragraphs = [p.get_text(" ", strip=True) for p in soup.find_all("p")]
-    text = "\n".join(p for p in paragraphs if len(p) > 40)
-
-    return text[:20000]
-
-
-def save_results_to_json(matched):
-    Path(DATA_DIR).mkdir(exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = Path(DATA_DIR) / f"matched_{timestamp}.json"
-
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(matched, f, ensure_ascii=False, indent=2)
-
-    print(f"\nSaved JSON results to: {filename}")
-
-
-def save_results_to_csv(matched):
-    Path(DATA_DIR).mkdir(exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    filename = Path(DATA_DIR) / f"matched_{timestamp}.csv"
-
-    with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=["title", "url", "category", "score", "summary"]
-        )
-        writer.writeheader()
-        writer.writerows(matched)
-
-    print(f"Saved CSV results to: {filename}")
-
 
 def main():
     sources = load_sources()
     seen_urls = load_seen()
-
-    if not sources:
-        print("No source URLs found in sources.txt")
-        return
-
     matched = []
 
     for source in sources:
-        print(f"\nChecking source: {source}")
-        try:
-            links = extract_links_from_section(source)
-        except Exception as e:
-            print(f"  Failed to extract links: {e}")
-            continue
-
-        for title, url in links:
+        print(f"\nParsing RSS: {source}")
+        feed = feedparser.parse(source)
+        
+        for entry in feed.entries[:15]: # Process the top 15 latest items per feed
+            url = entry.link
+            title = entry.title
+            
             if url in seen_urls:
                 continue
+                
+            print(f"  Evaluating: {title[:60]}...")
+            
+            # Use the RSS summary if it's long enough, otherwise fetch the full page
+            text_content = BeautifulSoup(entry.get('summary', ''), "lxml").get_text(" ", strip=True)
+            if len(text_content) < 500:
+                text_content = fetch_full_text(url)
+                
+            if len(text_content) < 300:
+                print("    Skipping: Not enough text content.")
+                seen_urls.add(url)
+                save_seen(seen_urls)
+                continue
 
-            print(f"  Reading: {title[:80]}")
-            text = fetch_article_text(url)
+            # Classify using the dynamic provider
+            result = classify_article(title, url, text_content)
+            
+            # Save state immediately
             seen_urls.add(url)
-
-            if len(text) < 500:
-                print("    Skipping: article text too short")
-                continue
-
-            try:
-                result = classify_article(title, url, text)
-            except Exception as e:
-                print(f"    Classification failed: {e}")
-                continue
+            save_seen(seen_urls)
 
             if result.get("relevant"):
-                matched_item = {
+                matched.append({
                     "title": title,
                     "url": url,
                     "category": result.get("primary_category"),
                     "score": result.get("score"),
-                    "summary": result.get("bangla_summary"),
-                }
-                matched.append(matched_item)
-                print(f"    MATCH [{result.get('score')}]: {url}")
+                    "summary": result.get("bangla_summary")
+                })
+                print(f"    MATCH [{result.get('score')}]: {result.get('primary_category')}")
             else:
                 print("    Not relevant")
+            
+            time.sleep(1) # Be polite to APIs
 
-            time.sleep(1)
-
-    save_seen(seen_urls)
-
-    print("\n=== MATCHED ARTICLES ===")
-    for item in matched:
-        print(f"\nTitle: {item['title']}")
-        print(f"URL: {item['url']}")
-        print(f"Category: {item['category']}")
-        print(f"Score: {item['score']}")
-        print(f"Summary: {item['summary']}")
-
-    if matched:
-        save_results_to_json(matched)
-        save_results_to_csv(matched)
-    else:
-        print("\nNo matched articles found.")
-
+    # ... [Keep your JSON and CSV saving logic here] ...
+    print(f"\nFinished processing. Found {len(matched)} relevant articles.")
 
 if __name__ == "__main__":
     main()
+
